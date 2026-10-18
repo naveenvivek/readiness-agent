@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Environments and tool caches
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/
+
+# Local inputs and outputs (cloned sample apps, generated reports)
+samples/
+reports/
+*.zip

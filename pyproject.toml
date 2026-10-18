@@ -1,0 +1,33 @@
+[project]
+name = "readiness-agent"
+version = "0.1.0"
+description = "Cloud Run readiness agent: deterministic checks for Spring Boot apps moving to Google Cloud"
+readme = "README.md"
+authors = [{ name = "Naveen Kumar Vivekanandan" }]
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2.14.1",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+readiness-scan = "readiness_agent.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.32,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

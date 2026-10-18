@@ -1,0 +1,179 @@
+# Cloud Run readiness rules for Spring Boot (Maven) applications.
+#
+# Each rule picks a generic detector from src/readiness_agent/detectors.py and passes it
+# parameters. Adding a rule that reuses an existing detector needs no Python changes.
+# Regexes are in single quotes so YAML keeps backslashes as they are.
+
+rules:
+  # ---------------------------------------------------------------- blockers
+  - id: STATE-001
+    title: Embedded H2 database
+    severity: blocker
+    detector: dependency_present
+    params:
+      artifact_id: h2
+    fix: >-
+      Each Cloud Run instance would get its own in-memory database, and data is lost when
+      instances scale to zero. Use Cloud SQL (or AlloyDB) and keep H2 for tests only.
+
+  - id: STATE-002
+    title: Background thread doing work outside requests
+    severity: blocker
+    detector: file_regex
+    params:
+      glob: '*.java'
+      pattern: 'new Thread\('
+    fix: >-
+      With request-based billing, Cloud Run only gives an instance CPU while it serves a
+      request, so background loops stall between requests. Either switch the service to
+      instance-based billing with min-instances >= 1, move the work to a Cloud Run job or a
+      separate always-on service, or replace polling with Pub/Sub events.
+
+  - id: PORT-001
+    title: Hardcoded server port
+    severity: blocker
+    detector: property_match
+    params:
+      key: 'server\.port'
+      value: '^\d+$'
+    fix: Cloud Run sets the port in $PORT. Use server.port=${PORT:8080}.
+
+  - id: SEC-001
+    title: Literal password in a properties file
+    severity: blocker
+    detector: property_match
+    params:
+      key: '(?i).*password.*'
+      value: '^(?!\$\{).+'
+    fix: Store it in Secret Manager and expose it to Cloud Run as an environment variable.
+
+  - id: SEC-002
+    title: Password placeholder with a real default value
+    severity: blocker
+    detector: property_match
+    params:
+      key: '(?i).*password.*'
+      value: '^\$\{[^:}]+:[^}]+\}$'
+    fix: >-
+      If the environment variable is missing, the app silently starts with the known default
+      password. Remove the default (${DB_PASS}) so startup fails fast, and supply the value
+      from Secret Manager.
+
+  - id: SEC-004
+    title: Literal password in an environment file
+    severity: blocker
+    detector: file_regex
+    params:
+      glob: '*.env'
+      pattern: '(?i)^\s*(export\s+)?[A-Z0-9_]*PASSWORD\s*=\s*"?[^"\s$]'
+    fix: Remove it from the repo, rotate it, and inject it from Secret Manager at deploy time.
+
+  - id: NET-001
+    title: Service opened to every IP address
+    severity: blocker
+    detector: file_regex
+    params:
+      glob: '*.sh'
+      pattern: '0\.0\.0\.0/0'
+    fix: >-
+      Use Cloud SQL with a private IP, reached from Cloud Run through Direct VPC egress, and
+      authenticate with IAM or Secret Manager credentials.
+
+  - id: DB-001
+    title: Schema and data scripts run on every startup
+    severity: blocker
+    detector: property_match
+    params:
+      key: 'spring\.sql\.init\.mode'
+      value: '^always$'
+    fix: >-
+      Every new Cloud Run instance would re-run schema.sql and data.sql, and instances race
+      each other when scaling out. Run migrations once (Flyway or Liquibase) as a Cloud Run
+      job before deploying, and set spring.sql.init.mode=never in production.
+
+  # ---------------------------------------------------------------- warnings
+  - id: SEC-003
+    title: All actuator endpoints exposed
+    severity: warning
+    detector: property_match
+    params:
+      key: 'management\.endpoints\.web\.exposure\.include'
+      value: '\*'
+    fix: >-
+      A Cloud Run URL is public by default, so env, heapdump and other endpoints would be
+      reachable. Expose only health (and info), or protect the service with IAM.
+
+  - id: JOB-001
+    title: In-process scheduled job
+    severity: warning
+    detector: file_regex
+    params:
+      glob: '*.java'
+      pattern: '@Scheduled'
+    fix: >-
+      Instances can scale to zero or run several copies, so the job may never fire or fire
+      many times. Use Cloud Scheduler to trigger a Cloud Run job or an HTTP endpoint.
+
+  - id: DISC-001
+    title: Eureka service discovery
+    severity: warning
+    detector: dependency_present
+    params:
+      artifact_id: spring-cloud-starter-netflix-eureka-client
+    fix: Not needed on Cloud Run. Each service gets its own HTTPS URL; call it directly.
+
+  - id: LOG-001
+    title: Logging to a local file
+    severity: warning
+    detector: property_match
+    params:
+      key: 'logging\.file(\.name|\.path)?'
+      value: '.+'
+    fix: >-
+      The container filesystem is temporary and Cloud Logging reads stdout and stderr. Log to
+      the console, ideally as JSON so Cloud Logging can parse severity and fields.
+
+  - id: FS-001
+    title: Reads a file from the local filesystem
+    severity: warning
+    detector: file_regex
+    params:
+      glob: '*.java'
+      pattern: 'Files\.(readAllBytes|readString|newInputStream|lines)\(\s*Paths?\.(get|of)\('
+    fix: >-
+      Files from the VM (keys, certificates, config) will not exist in the container. Mount
+      secrets from Secret Manager as a volume, or read objects from Cloud Storage.
+
+  - id: DB-002
+    title: Database installed by a server setup script
+    severity: warning
+    detector: file_regex
+    params:
+      glob: '*.sh'
+      pattern: 'install\S*\s+(-\S+\s+)*postgresql(?!-client)'
+    fix: >-
+      The database runs on the same machine as the app. Move it to Cloud SQL for PostgreSQL
+      so the app can scale and be replaced independently.
+
+  - id: OBS-001
+    title: Spring Cloud Sleuth configuration
+    severity: warning
+    detector: property_match
+    params:
+      key: 'spring\.sleuth\..+'
+      value: '.*'
+    fix: >-
+      Sleuth was removed in Spring Boot 3, so these settings are silently ignored and tracing
+      may not work. Use Micrometer Tracing with an OpenTelemetry exporter to Cloud Trace.
+
+  # ---------------------------------------------------------------- info
+  - id: CACHE-001
+    title: In-process cache
+    severity: info
+    detector: file_regex
+    params:
+      glob: '*.java'
+      pattern: '@EnableCaching|CacheBuilder\.newBuilder\('
+    fix: >-
+      Each instance keeps its own cache, so instances can disagree. Fine for reference data;
+      for shared or frequently changing data use Memorystore.
